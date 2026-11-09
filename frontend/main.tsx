@@ -2,7 +2,7 @@ import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import Wordmark from './VectorWordmark';
-import Gallery from './InfiniteGallery';
+import Gallery from './FiniteGallery';
 import VisualCarousel from './VisualCarousel';
 
 const wm=document.getElementById('wordmark-root');
@@ -18,13 +18,7 @@ if(container && data){
  const lang=document.documentElement.lang;
  const mobile=matchMedia('(max-width: 800px)').matches;
  const galleryCopy=JSON.parse(document.getElementById('gallery-copy')?.textContent||'{}');
- const fallback=['#322c2a','#262a29','#323132','#3a302c'];
- function placeholder(i:number){let svg=`<svg xmlns="http://www.w3.org/2000/svg" width="360" height="440"><rect width="360" height="440" fill="${fallback[i%4]}"/><path d="M70 300 L180 90 L290 300 M105 235 H255" fill="none" stroke="#a7a39d" stroke-opacity=".45" stroke-width="1"/><circle cx="180" cy="205" r="90" fill="none" stroke="#c95952" stroke-opacity=".55"/></svg>`;return 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)}
- const images=items.map((p,i)=>({src:p.cover||placeholder(i),fit:p.cover ? (p.cover_fit||'contain') : 'cover',alt:p.title[lang],title:p.title[lang],category:p.category[lang],href:'/'+lang+'/project/'+p.slug}));
- if(images.length){
-  function Canvas(){const [active,setActive]=React.useState(false);return <>{createPortal(<button className="touch-toggle" aria-pressed={active} onClick={()=>setActive(!active)}>{active?galleryCopy.off:galleryCopy.on}</button>,document.getElementById('gallery-controls')!)}<Gallery images={images} density={mobile?12:5} imageWidth={mobile?135:190} imageHeight={mobile?160:225} rounded={0} dragSpeed={20} driftAmount={8} friction={10} backgroundColor="#101010" touchEnabled={active} style={{width:'100%',height:'100%',minWidth:0,minHeight:0}} /></>}
-  createRoot(container).render(<Canvas/>);
- }
+ if(items.length){createRoot(container).render(<Gallery items={items} lang={lang} labels={galleryCopy}/>)}
 }
 
 const visualRoot=document.getElementById('visual-root'),visualData=document.getElementById('visual-data');

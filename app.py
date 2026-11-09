@@ -1,6 +1,6 @@
 import os, sys, re, json, sqlite3, time, secrets, hashlib, base64, urllib.parse, urllib.request, urllib.error, threading, shutil
 from pathlib import Path
-from functools import wraps
+from functools import wraps, lru_cache
 from contextlib import contextmanager
 os.umask(0o077)
 from flask import Flask, request, session, jsonify, render_template, redirect, send_from_directory, abort, Response
@@ -77,6 +77,33 @@ def projects(pub=False):
   if not pub or p.get('published'): result.append(p)
  return result
 
+@lru_cache(maxsize=512)
+def image_digest(path, modified_ns, size):
+ try:
+  h=hashlib.sha256()
+  with open(path,'rb') as f:
+   for chunk in iter(lambda:f.read(1024*1024),b''):h.update(chunk)
+  return h.hexdigest()
+ except OSError:return None
+
+def gallery_assets(items):
+ # One card per distinct image across the canvas; unillustrated projects remain discoverable.
+ output=[];seen=set()
+ for p in items:
+  valid=[]
+  for src in [p.get('cover')] + (p.get('canvas_images') or []):
+   if not isinstance(src,str) or not src:continue
+   if re.fullmatch(r'/media/[a-f0-9]{32}\.(png|jpg|gif|webp)',src): path=UPLOADS/src.rsplit('/',1)[-1]
+   elif src=='/static/sera.webp':path=ROOT/'static'/'sera.webp'
+   else:continue
+   try:st=path.stat(); digest=image_digest(str(path),st.st_mtime_ns,st.st_size)
+   except OSError:continue
+   if digest and digest not in seen:
+    seen.add(digest); valid.append(src)
+  for src in valid or ['']:
+   output.append({'src':src,'fit':p.get('cover_fit') or 'contain','slug':p['slug'],'title':p['title'],'category':p['category']})
+ return output
+
 def setting(key,default=''):
  with conn() as db: r=db.execute('SELECT value FROM settings WHERE key=?',(key,)).fetchone()
  return r[0] if r else default
@@ -147,10 +174,16 @@ def validate(p):
  if related not in (None,'') and (isinstance(related,bool) or not isinstance(related,int) or related<=0 or p.get('kind')!='news'):return 'Некорректный связанный проект'
  if not re.fullmatch(r'#[0-9a-fA-F]{6}',str(p.get('background',''))):return 'Выберите цвет фона'
  if not isinstance(p.get('blur'),(int,float)) or not 0<=p['blur']<=60:return 'Некорректное размытие'
- def media_ok(s):return not s or bool(re.fullmatch(r'/media/[a-f0-9]{32}\.(?:png|jpg|gif|webp|mp4|webm)',s)) or s=='/static/sera.webp'
+ def media_ok(s):return s is None or (isinstance(s,str) and (not s or bool(re.fullmatch(r'/media/[a-f0-9]{32}\.(?:png|jpg|gif|webp|mp4|webm)',s)) or s=='/static/sera.webp'))
  if not media_ok(p.get('cover','')) or not media_ok(p.get('background_image','')) or any(str(p.get(k,'')).endswith(('.mp4','.webm')) for k in ('cover','background_image')):return 'Для обложки и фона выберите изображение'
  if not media_ok(p.get('feature_image','')) or str(p.get('feature_image','')).endswith(('.mp4','.webm')):return 'Для отдельного раздела выберите изображение'
  if p.get('cover_fit') not in (None,'','contain','cover'):return 'Некорректный режим изображения на холсте'
+ if p.get('detail_image') and (not media_ok(p['detail_image']) or p['detail_image'].endswith(('.mp4','.webm'))):return 'Для обложки страницы выберите изображение'
+ if p.get('detail_fit') not in (None,'','contain','cover'):return 'Некорректный режим обложки страницы'
+ if p.get('darkness') is not None and (type(p['darkness']) is not int or not 0<=p['darkness']<=100):return 'Некорректное затемнение'
+ ci=p.get('canvas_images') or []
+ if not isinstance(ci,list) or len(ci)>60 or any(not isinstance(x,str) or not x or not media_ok(x) or x.endswith(('.mp4','.webm')) for x in ci):return 'Для холста выберите до 60 изображений'
+ if len(set(ci))!=len(ci):return 'Одинаковые файлы холста нельзя добавлять дважды'
  if not isinstance(p.get('blocks'),list) or len(p['blocks'])>40:return 'Слишком много элементов'
  for b in p['blocks']:
   if not isinstance(b,dict) or b.get('type') not in ('text','image_left','image_right','image','video'):return 'Неизвестный элемент'
@@ -190,7 +223,7 @@ def render_public(template,lang='ru',section='',title=None,description=None,og_i
  canonical=SITE_URL+'/'+lang+'/'+section
  seo_key={'':'home','news':'news','about':'about','privacy':'privacy'}.get(section)
  if seo_key: title=copy('seo_'+seo_key+'_title');description=copy('seo_'+seo_key+'_desc')
- visual=content.get('visual',{});about_photos=content.get('about_photos',{});contacts={'telegram':'https://t.me/aclbt','email':'acoulbot@gmail.com','connect':'http://trioz.ru/connect'};contacts.update(content.get('contacts',{}));same_as=[contacts[k] for k in ('telegram','connect') if contacts.get(k)]
+ visual=content.get('visual',{});about_photos=content.get('about_photos',{});contacts={'telegram':'https://t.me/aclbt','email':'acoulbot@gmail.com','connect':'http://trioz.ru/connect','discord':''};contacts.update(content.get('contacts',{}));same_as=[contacts[k] for k in ('telegram','connect','discord') if contacts.get(k)]
  return render_template(template,lang=lang,site_url=SITE_URL,section=section,canonical=canonical,seo_title=title or titles[lang],seo_desc=description or desc[lang],og_image=SITE_URL+(og_image or '/static/og-default.png'),ga_id=analytics_id('GA_MEASUREMENT_ID',r'G-[A-Z0-9]{4,20}'),ym_id=analytics_id('YANDEX_METRIKA_ID',r'[0-9]{1,20}'),google_verification=os.environ.get('GOOGLE_SITE_VERIFICATION',''),yandex_verification=os.environ.get('YANDEX_SITE_VERIFICATION',''),featured_sections={p.get('feature') for p in projects(True) if p.get('feature')},copy=copy,visual=visual,about_photos=about_photos,contacts=contacts,same_as=same_as,**kw)
 @app.get('/')
 def home_root():return home('ru')
@@ -199,7 +232,7 @@ def home(lang):
  lang_ok(lang);ps=projects(True);featured={p['feature']:p for p in ps if p.get('feature')}
  work=[p for p in ps if p.get('kind','project')=='project']
  news=sorted((p for p in ps if p.get('kind')=='news'),key=lambda p:p.get('published_at',0),reverse=True)
- return render_public('index.html',lang,projects=work,news=news,featured=featured,playlist=setting('playlist'))
+ return render_public('index.html',lang,projects=work,canvas_items=gallery_assets(work),news=news,featured=featured,playlist=setting('playlist'))
 @app.get('/project/<slug>')
 def legacy_detail(slug):return redirect('/ru/project/'+slug,code=301)
 @app.get('/<lang>/project/<slug>')
@@ -216,6 +249,23 @@ def preview(lang,pid):
  if not p:abort(404)
  r=app.make_response(render_public('project.html',lang,section='preview/'+str(pid),title=(p['title'].get(lang) or 'Preview')+' — acoulbot',description=p['summary'].get(lang) or '',p=p,related=None,preview=True))
  r.headers['X-Robots-Tag']='noindex, nofollow';r.headers['Cache-Control']='no-store';return r
+@app.post('/api/admin/preview-unsaved/<lang>')
+@admin_required
+@csrf_required
+def preview_unsaved(lang):
+ lang_ok(lang); p=request.get_json(silent=True)
+ if not isinstance(p,dict):return jsonify(error='Некорректная запись'),400
+ p=dict(p);p['published']=False
+ err=validate(p)
+ if err:return jsonify(error=err),400
+ p['kind']=p.get('kind') or 'project'
+ html=render_public('project.html',lang,section='preview',title=(p['title'].get(lang) or 'Preview')+' — acoulbot',description=p['summary'].get(lang) or '',p=p,related=None,preview=True)
+ # The sandboxed preview is deliberately non-interactive.
+ html=re.sub(r'<script\b[^>]*>.*?</script\s*>','',html,flags=re.I|re.S)
+ response=app.make_response(html)
+ response.headers['X-Robots-Tag']='noindex, nofollow';response.headers['Cache-Control']='no-store'
+ return response
+
 @app.get('/<lang>/news')
 def news_page(lang):
  lang_ok(lang);news=sorted((p for p in projects(True) if p.get('kind')=='news'),key=lambda p:p.get('published_at',0),reverse=True)
@@ -295,10 +345,13 @@ def save_project():
  p=request.get_json(silent=True)
  err=validate(p)
  if err:return jsonify(error=err),400
- p={k:p.get(k) for k in ('slug','title','category','summary','url','feature','cover','feature_image','cover_fit','background','background_image','blur','published','blocks','kind','related_id')}
+ p={k:p.get(k) for k in ('slug','title','category','summary','url','feature','cover','feature_image','cover_fit','canvas_images','detail_image','detail_fit','darkness','background','background_image','blur','published','blocks','kind','related_id')}
  p['kind']=p.get('kind') or 'project'
  p['feature_image']=p.get('feature_image') or ''
  p['cover_fit']=p.get('cover_fit') or 'contain'
+ p['canvas_images']=p.get('canvas_images') or []
+ p['detail_image']=p.get('detail_image') or ''
+ p['detail_fit']=p.get('detail_fit') or 'contain'
  try:
   with conn() as db:
    if p.get('related_id'):
@@ -350,12 +403,23 @@ def upload():
  return jsonify(url='/media/'+name)
 @app.errorhandler(RequestEntityTooLarge)
 def too_large(e):return jsonify(error='Файл слишком большой: максимум 150 МБ на запрос'),413
+@app.get('/api/admin/media-audit')
+@admin_required
+def media_audit():
+ # Never delete: uploads may still be referenced outside the stored content or in unsaved edits.
+ used=set(re.findall(r'/media/([a-f0-9]{32}\.(?:png|jpg|gif|webp|mp4|webm))',json.dumps({'projects':projects(),'site':site_content()},ensure_ascii=False)))
+ files=[]
+ for path in UPLOADS.iterdir():
+  if path.is_file() and re.fullmatch(r'[a-f0-9]{32}\.(?:png|jpg|gif|webp|mp4|webm)',path.name) and path.name not in used:
+   files.append({'name':path.name,'bytes':path.stat().st_size})
+ return jsonify(files=sorted(files,key=lambda f:f['name']))
+
 @app.get('/api/admin/site')
 @admin_required
 def get_site_content():
  data=site_content();custom=data.get('copy',{})
  fields=[dict(f,ru=custom.get(f['key'],{}).get('ru',f['ru']),en=custom.get(f['key'],{}).get('en',f['en'])) for f in FIELDS]
- return jsonify(fields=fields,visual=data.get('visual',{'enabled':True,'captions':False,'photos':[]}),about_photos=data.get('about_photos',{'enabled':True,'captions':False,'photos':[]}),contacts=data.get('contacts',{'telegram':'https://t.me/aclbt','email':'acoulbot@gmail.com','connect':'http://trioz.ru/connect'}))
+ return jsonify(fields=fields,visual=data.get('visual',{'enabled':True,'captions':False,'photos':[]}),about_photos=data.get('about_photos',{'enabled':True,'captions':False,'photos':[]}),contacts=dict({'telegram':'https://t.me/aclbt','email':'acoulbot@gmail.com','connect':'http://trioz.ru/connect','discord':''},**data.get('contacts',{})))
 
 @app.post('/api/admin/site/<part>')
 @admin_required
@@ -372,9 +436,9 @@ def set_site_content(part):
    if BY_KEY[k].get('optional') and bool(v['ru'].strip())!=bool(v['en'].strip()):return jsonify(error='Заметку нужно заполнить на двух языках или оставить пустой'),400
   save_site_part(part,value);return jsonify(ok=True)
  if part=='contacts':
-  if not isinstance(value,dict) or set(value.keys())!={'telegram','email','connect'}:return jsonify(error='Некорректные контакты'),400
+  if not isinstance(value,dict) or not {'telegram','email','connect'} <= set(value.keys()) or set(value.keys()) - {'telegram','email','connect','discord'}:return jsonify(error='Некорректные контакты'),400
   if any(not isinstance(v,str) or len(v)>500 for v in value.values()):return jsonify(error='Некорректные контакты'),400
-  if any(value[k] and not valid_url(value[k]) for k in ('telegram','connect')):return jsonify(error='Ссылки должны начинаться с http:// или https://'),400
+  if any(value[k] and not valid_url(value[k]) for k in ('telegram','connect','discord') if k in value):return jsonify(error='Ссылки должны начинаться с http:// или https://'),400
   if value['email'] and not re.fullmatch(r'[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+',value['email']):return jsonify(error='Укажите корректную почту'),400
   save_site_part(part,value);return jsonify(ok=True)
  if part not in ('visual','about_photos') or not isinstance(value,dict):return jsonify(error='Неизвестный раздел'),400

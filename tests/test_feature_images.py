@@ -15,7 +15,7 @@ class Images(unittest.TestCase):
   cover=self.upload(); art=self.upload(); p=next(x for x in a.projects() if x['slug']=='connect'); p.update(cover=cover,feature_image=art,cover_fit='contain')
   r=self.c.post('/api/admin/projects',json=p,headers=self.h);self.assertEqual(r.status_code,200)
   html=self.c.get('/ru/').text
-  self.assertIn('class="feature-image" src="'+art+'"',html);self.assertIn(cover,html);self.assertIn('"cover_fit": "contain"',html)
+  self.assertIn('class="feature-image" src="'+art+'"',html);self.assertIn(cover,html);self.assertIn('"fit": "contain"',html)
   p['feature_image']='';p['cover_fit']='invalid';self.assertEqual(self.c.post('/api/admin/projects',json=p,headers=self.h).status_code,400)
   p.pop('feature_image');p.pop('cover_fit');self.assertEqual(self.c.post('/api/admin/projects',json=p,headers=self.h).status_code,200)
   self.assertIn('class="orbit one"',self.c.get('/ru/').text)
