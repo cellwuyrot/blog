@@ -149,6 +149,8 @@ def validate(p):
  if not isinstance(p.get('blur'),(int,float)) or not 0<=p['blur']<=60:return 'Некорректное размытие'
  def media_ok(s):return not s or bool(re.fullmatch(r'/media/[a-f0-9]{32}\.(?:png|jpg|gif|webp|mp4|webm)',s)) or s=='/static/sera.webp'
  if not media_ok(p.get('cover','')) or not media_ok(p.get('background_image','')) or any(str(p.get(k,'')).endswith(('.mp4','.webm')) for k in ('cover','background_image')):return 'Для обложки и фона выберите изображение'
+ if not media_ok(p.get('feature_image','')) or str(p.get('feature_image','')).endswith(('.mp4','.webm')):return 'Для отдельного раздела выберите изображение'
+ if p.get('cover_fit') not in (None,'','contain','cover'):return 'Некорректный режим изображения на холсте'
  if not isinstance(p.get('blocks'),list) or len(p['blocks'])>40:return 'Слишком много элементов'
  for b in p['blocks']:
   if not isinstance(b,dict) or b.get('type') not in ('text','image_left','image_right','image','video'):return 'Неизвестный элемент'
@@ -293,8 +295,10 @@ def save_project():
  p=request.get_json(silent=True)
  err=validate(p)
  if err:return jsonify(error=err),400
- p={k:p.get(k) for k in ('slug','title','category','summary','url','feature','cover','background','background_image','blur','published','blocks','kind','related_id')}
+ p={k:p.get(k) for k in ('slug','title','category','summary','url','feature','cover','feature_image','cover_fit','background','background_image','blur','published','blocks','kind','related_id')}
  p['kind']=p.get('kind') or 'project'
+ p['feature_image']=p.get('feature_image') or ''
+ p['cover_fit']=p.get('cover_fit') or 'contain'
  try:
   with conn() as db:
    if p.get('related_id'):

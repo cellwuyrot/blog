@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef } from "react"
 // Official prop schema:
 //   { url, width, height } — intrinsic dims kept for the image array, but tile
 //   footprint is now driven by imageWidth/imageHeight (fixed box, cover-fit).
-type GalleryImage = { src: string; srcSet?: string; alt?: string; href?: string; title?: string; category?: string }
+type GalleryImage = { src: string; srcSet?: string; fit?: "cover" | "contain"; alt?: string; href?: string; title?: string; category?: string }
 
 interface InfiniteGalleryProps {
     width?: string | number
@@ -363,7 +363,7 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
             let el = pool.tileEls.get(key)
             if (!el) {
                 el = document.createElement("div")
-                el.className = "inf-card"
+                el.className = "inf-card" + (safeImages[t.imgIdx]?.fit === "contain" ? " inf-card--contain" : "")
                 el.style.position = "absolute"
                 el.style.left = "50%"
                 el.style.top = "50%"
@@ -395,7 +395,7 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
                 img.draggable = false
                 img.style.width = "100%"
                 img.style.height = "100%"
-                img.style.objectFit = "cover"
+                img.style.objectFit = src?.fit === "contain" ? "contain" : "cover"
                 img.style.display = "block"
                 img.style.pointerEvents = "none"
                 img.style.userSelect = "none"
@@ -408,6 +408,15 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
                 title.textContent = src?.title || ""
                 caption.append(category, title)
                 el.appendChild(caption)
+                if (src?.fit === "contain") {
+                    const positionCaption = () => {
+                        if (!img.naturalWidth || !img.naturalHeight) return
+                        const drawnHeight = Math.min(safeImageHeight, safeImageWidth * img.naturalHeight / img.naturalWidth)
+                        caption.style.top = `${(safeImageHeight + drawnHeight) / 2}px`
+                    }
+                    img.addEventListener("load", positionCaption, { once: true })
+                    if (img.complete) positionCaption()
+                }
 
                 scene.appendChild(el)
                 pool.tileEls.set(key, el)
