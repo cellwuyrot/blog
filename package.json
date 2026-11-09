@@ -1,0 +1,1 @@
+{"name":"acoulbot-portfolio","private":true,"version":"3.0.0","scripts":{"build":"node frontend/build.mjs"},"dependencies":{"framer-motion":"12.23.26","motion-dom":"12.23.23","motion-utils":"12.23.6","react":"18.3.1","react-dom":"18.3.1"},"devDependencies":{"esbuild":"0.25.0"}}
