@@ -35,3 +35,20 @@
 .inf-card--contain .inf-caption{inset:auto 0 auto;top:100%;padding:8px 3px 0;background:none;text-shadow:0 1px 5px #000,0 1px 3px #000}
 .connect-art .feature-image{position:absolute;width:100%;height:100%;object-fit:contain;z-index:2}
 .connect-art.has-image:before,.connect-art.has-image:after{display:none}
+
+/* Connect artwork without frame */
+.connect-art.has-image {
+  aspect-ratio: auto;
+  background: transparent;
+  border: 0;
+  overflow: visible;
+  display: block;
+}
+.connect-art.has-image .feature-image {
+  position: static;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  object-fit: initial;
+}
