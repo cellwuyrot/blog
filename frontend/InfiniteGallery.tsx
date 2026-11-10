@@ -147,10 +147,10 @@ const MAX_RANGE = 20
  *    from the wheel (positive = zooming in). Effective zoom = 2^logZoom.
  *  - At any moment we pick the "current" octave = floor(logZoom), and the
  *    fractional remainder frac = logZoom - octave is in [0, 1).
- *  - Two cell grids are rendered SIMULTANEOUSLY (current + next octave), cross-
- *    faded so tile sizes stay in a roughly constant band: bakedScale × [0.5,2).
- *    No matter how long the user zooms, tiles never grow huge or shrink to
- *    nothing — classic zoom-quilt feel.
+ *  - Candidates come from the original scattered octave grids; only one
+ *    on-screen instance per image is chosen. A selected occurrence is kept
+ *    until it leaves view or becomes too small/large to be useful. It can then
+ *    reappear at another depth. Zoom itself has no fixed hard stop.
  *
  * @framerSupportedLayoutWidth any
  * @framerSupportedLayoutHeight any
@@ -197,7 +197,7 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
 
     // ---- Camera & input state (motion values; no React re-renders per frame) -
 
-    const saved = useMemo(() => { try { return JSON.parse(sessionStorage.getItem("ac-gallery-state") || "null") || {} } catch { return {} } }, [])
+    const saved = useMemo(() => { try { return JSON.parse(sessionStorage.getItem("ac-gallery-v5") || "null") || {} } catch { return {} } }, [])
     const initial = (key: string) => typeof saved[key] === "number" && Number.isFinite(saved[key]) ? saved[key] : 0
     const targetX = useMotionValue(initial("x"))
     const targetY = useMotionValue(initial("y"))
@@ -316,247 +316,83 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
         })
         if (container) ro.observe(container)
 
-        const layerPools = new Map<
-            number,
-            {
-                tileEls: Map<string, HTMLDivElement>
-                imgEls: Map<string, HTMLImageElement>
-            }
-        >()
-
-        const getPool = (octave: number) => {
-            let pool = layerPools.get(octave)
-            if (!pool) {
-                pool = { tileEls: new Map(), imgEls: new Map() }
-                layerPools.set(octave, pool)
-            }
-            return pool
+        // One physical element per image. Its placement remains stable while it
+        // is visible. When it leaves the view, it can reappear at a new depth.
+        type Draw = { el: HTMLDivElement; img: HTMLImageElement | null; tile: Tile | null; x: number; y: number; scale: number; opacity: number }
+        const nodes = new Map<number, Draw>()
+        const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        const keyOf = (t: Tile) => `${t.octave}:${t.cx}:${t.cy}:${t.slot}`
+        const getNode = (idx:number):Draw => {
+            const previous=nodes.get(idx); if(previous) return previous
+            const src=safeImages[idx]
+            const el=document.createElement("div")
+            el.className="inf-card"+(src.fit === "contain" ? " inf-card--contain" : "")+(!src.src ? " inf-card--empty" : "")
+            Object.assign(el.style,{position:"absolute",left:"50%",top:"50%",transformOrigin:"0 0",willChange:"transform, opacity",pointerEvents:"auto"})
+            el.dataset.href=src.href || "";el.dataset.imageIndex=String(idx)
+            el.setAttribute("role","link");el.setAttribute("aria-label",src.title || src.alt || "Project")
+            el.addEventListener("click",(e)=>{if(!touchEnabled && matchMedia("(pointer: coarse)").matches && e.detail && el.dataset.href){sessionStorage.setItem("ac-gallery-v5",JSON.stringify({x:targetX.get(),y:targetY.get(),zoom:targetLogZoom.get()}));window.location.assign(el.dataset.href)}})
+            el.addEventListener("keydown",e=>{if(e.key==="Enter" && el.dataset.href){sessionStorage.setItem("ac-gallery-v5",JSON.stringify({x:targetX.get(),y:targetY.get(),zoom:targetLogZoom.get()}));window.location.assign(el.dataset.href)}})
+            let img:HTMLImageElement|null=null
+            if(src.src){img=document.createElement("img");img.src=src.src;if(src.srcSet)img.srcset=src.srcSet;img.alt="";img.draggable=false;Object.assign(img.style,{width:"100%",height:"100%",objectFit:src.fit === "contain" ? "contain" : "cover",display:"block",pointerEvents:"none",userSelect:"none"});el.appendChild(img)}
+            else {let art=document.createElement("span");art.className="inf-placeholder";art.setAttribute("aria-hidden","true");art.textContent="↗";el.appendChild(art)}
+            const caption=document.createElement("span");caption.className="inf-caption";const category=document.createElement("small"),title=document.createElement("strong");category.textContent=src.category || "";title.textContent=src.title || "";caption.append(category,title);el.appendChild(caption)
+            if(src.fit === "contain" && img){const image=img;const positionCaption=()=>{if(!image.naturalWidth || !image.naturalHeight)return;const drawnHeight=Math.min(safeImageHeight,safeImageWidth*image.naturalHeight/image.naturalWidth);caption.style.top=`${(safeImageHeight+drawnHeight)/2}px`};image.addEventListener("load",positionCaption,{once:true});if(image.complete)positionCaption()}
+            scene.appendChild(el);let draw:Draw={el,img,tile:null,x:0,y:0,scale:1,opacity:0};nodes.set(idx,draw);return draw
         }
-
-        const disposeLayer = (octave: number) => {
-            const pool = layerPools.get(octave)
-            if (!pool) return
-            pool.tileEls.forEach((el) => {
-                if (el.parentNode === scene) scene.removeChild(el)
-            })
-            pool.tileEls.clear()
-            pool.imgEls.clear()
-            layerPools.delete(octave)
+        type Projection={tile:Tile; x:number;y:number;scale:number;width:number;height:number}
+        const projectTile = (t:Tile,lz:number,cx:number,cy:number):Projection|null => {
+            let exp=lz-t.octave;if(exp < -20 || exp > 20)return null
+            const layerScale=Math.pow(2,exp),scale=t.bakedScale*layerScale,width=t.w*PX_PER_UNIT,height=t.h*PX_PER_UNIT
+            const x=(t.wx-cx)*layerScale*PX_PER_UNIT,y=(t.wy-cy)*layerScale*PX_PER_UNIT
+            if(!Number.isFinite(x+y+scale))return null
+            // Wait until a thumbnail is offscreen, too small, or has grown far
+            // beyond the viewport before selecting another occurrence.
+            if(width*scale < 5 || height*scale < 5 || width*scale > cW*4 || height*scale > cH*4)return null
+            if(Math.abs(x)>cW/2+width*scale/2+16 || Math.abs(y)>cH/2+height*scale/2+40)return null
+            return {tile:t,x,y,scale,width,height}
         }
-
-        const disposeAllLayers = () => {
-            Array.from(layerPools.keys()).forEach(disposeLayer)
+        const candidates = (octave:number,lz:number,cx:number,cy:number):Projection[] => {
+            const layerScale=Math.pow(2,lz-octave),camCellX=Math.floor(cx/CELL_SIZE),camCellY=Math.floor(cy/CELL_SIZE)
+            const rangeX=Math.min(MAX_RANGE,Math.ceil(cW/2/(PX_PER_UNIT*layerScale)/CELL_SIZE)+1)
+            const rangeY=Math.min(MAX_RANGE,Math.ceil(cH/2/(PX_PER_UNIT*layerScale)/CELL_SIZE)+1)
+            const out:Projection[]=[]
+            for(let dy=-rangeY;dy<=rangeY;dy++)for(let dx=-rangeX;dx<=rangeX;dx++)for(const t of generateCell(camCellX+dx,camCellY+dy,octave)){const p=projectTile(t,lz,cx,cy);if(p)out.push(p)}
+            return out
         }
-
-        const removeTile = (octave: number, key: string) => {
-            const pool = layerPools.get(octave)
-            if (!pool) return
-            const el = pool.tileEls.get(key)
-            if (el && el.parentNode === scene) scene.removeChild(el)
-            pool.tileEls.delete(key)
-            pool.imgEls.delete(key)
-        }
-
-        const ensureTile = (t: Tile): HTMLDivElement => {
-            const pool = getPool(t.octave)
-            const key = `${t.cx},${t.cy},${t.slot}`
-            let el = pool.tileEls.get(key)
-            if (!el) {
-                el = document.createElement("div")
-                el.className = "inf-card" + (safeImages[t.imgIdx]?.fit === "contain" ? " inf-card--contain" : "")
-                el.style.position = "absolute"
-                el.style.left = "50%"
-                el.style.top = "50%"
-                el.style.transformOrigin = "0 0"
-                el.style.willChange = "transform, opacity"
-                el.style.pointerEvents = "auto"
-                el.dataset.tileKey = key
-                el.setAttribute("role", "link")
-                const item = safeImages[t.imgIdx]
-                el.dataset.href = item?.href || ""
-                el.setAttribute("aria-label", item?.title || item?.alt || "Project")
-                el.addEventListener("click", (e) => {
-                    if (!touchEnabled && matchMedia("(pointer: coarse)").matches && e.detail && el?.dataset.href) {
-                        sessionStorage.setItem("ac-gallery-state", JSON.stringify({x: targetX.get(), y: targetY.get(), zoom: targetLogZoom.get()}))
-                        window.location.assign(el.dataset.href)
-                    }
-                })
-                el.addEventListener("keydown", (e) => {
-                    if (e.key === "Enter" && el?.dataset.href) {
-                        sessionStorage.setItem("ac-gallery-state", JSON.stringify({x: targetX.get(), y: targetY.get(), zoom: targetLogZoom.get()}))
-                        window.location.assign(el.dataset.href)
-                    }
-                })
-                const img = document.createElement("img")
-                const src = safeImages[t.imgIdx]
-                img.src = src?.src || ""
-                if (src?.srcSet) img.srcset = src.srcSet
-                img.alt = src?.alt || ""
-                img.draggable = false
-                img.style.width = "100%"
-                img.style.height = "100%"
-                img.style.objectFit = src?.fit === "contain" ? "contain" : "cover"
-                img.style.display = "block"
-                img.style.pointerEvents = "none"
-                img.style.userSelect = "none"
-                el.appendChild(img)
-                const caption = document.createElement("span")
-                caption.className = "inf-caption"
-                const category = document.createElement("small")
-                category.textContent = src?.category || ""
-                const title = document.createElement("strong")
-                title.textContent = src?.title || ""
-                caption.append(category, title)
-                el.appendChild(caption)
-                if (src?.fit === "contain") {
-                    const positionCaption = () => {
-                        if (!img.naturalWidth || !img.naturalHeight) return
-                        const drawnHeight = Math.min(safeImageHeight, safeImageWidth * img.naturalHeight / img.naturalWidth)
-                        caption.style.top = `${(safeImageHeight + drawnHeight) / 2}px`
-                    }
-                    img.addEventListener("load", positionCaption, { once: true })
-                    if (img.complete) positionCaption()
+        const project=()=>{
+            const cx=camX.get(),cy=camY.get(),lz=logZoom.get(),octave=Math.floor(lz)
+            const choices=new Map<number,Projection>()
+            // Retain each existing occurrence as long as it remains visible.
+            for(const [idx,node] of nodes){if(node.tile){const p=projectTile(node.tile,lz,cx,cy);if(p)choices.set(idx,p)}}
+            // Reuse the reference's scattered cells / octaves but choose only
+            // one occurrence per image across BOTH layers and the whole frame.
+            const nearby=choices.size<imagesCount ? [...candidates(octave,lz,cx,cy),...candidates(octave+1,lz,cx,cy)] : []
+            const byImage=new Map<number,Projection[]>()
+            for(const p of nearby){if(choices.has(p.tile.imgIdx))continue;const list=byImage.get(p.tile.imgIdx)||[];list.push(p);byImage.set(p.tile.imgIdx,list)}
+            for(const [idx,list] of byImage){let best:Projection|null=null,bestScore=Infinity
+                for(const p of list){let w=p.width*p.scale,h=p.height*p.scale
+                    // Prefer wholly visible items and leave breathing room; do not
+                    // pull every newly introduced image into the same centre.
+                    let score=.55*Math.hypot(p.x/(cW||1),p.y/(cH||1))
+                    score+=Math.max(0,(Math.abs(p.x)+w/2-cW/2)/(cW||1))*5+Math.max(0,(Math.abs(p.y)+h/2-cH/2)/(cH||1))*5
+                    for(const q of choices.values()){const dx=Math.abs(p.x-q.x),dy=Math.abs(p.y-q.y),rw=(w+q.width*q.scale)/2+28,rh=(h+q.height*q.scale)/2+38;score+=Math.max(0,1-dx/rw)*Math.max(0,1-dy/rh)*15}
+                    if(score<bestScore){best=p;bestScore=score}
                 }
-
-                scene.appendChild(el)
-                pool.tileEls.set(key, el)
-                pool.imgEls.set(key, img)
+                if(best)choices.set(idx,best)
             }
-            return el
+            for(const [idx,p] of choices){const n=getNode(idx),changed=!n.tile||keyOf(n.tile)!==keyOf(p.tile);n.tile=p.tile
+                if(changed){n.x=p.x;n.y=p.y;n.scale=p.scale;n.opacity=0}
+                else {n.x=p.x;n.y=p.y;n.scale=p.scale}
+                const size=Math.min(p.width*p.scale,p.height*p.scale);const large=Math.max(p.width*p.scale/(cW||1),p.height*p.scale/(cH||1))
+                const target=Math.min(1,Math.max(0,(size-5)/22),Math.max(0,(4-large)*1.3));n.opacity=reduced?target:lerp(n.opacity,target,.16)
+                n.el.style.width=`${p.width}px`;n.el.style.height=`${p.height}px`
+                n.el.style.transform=`translate3d(${n.x}px, ${n.y}px, 0) scale(${n.scale}) translate(${-p.width/2}px, ${-p.height/2}px)`
+                n.el.style.opacity=String(n.opacity);n.el.style.zIndex=String(Math.round(p.tile.bakedScale*100));n.el.tabIndex=n.opacity>.4?0:-1;n.el.style.pointerEvents=n.opacity>.4?"auto":"none"
+                if(n.img)n.img.style.borderRadius=`${(safeRounded/20)*(Math.min(p.width,p.height)/2)}px`
+            }
+            for(const [idx,n] of nodes)if(!choices.has(idx)){n.tile=null;n.opacity=reduced?0:lerp(n.opacity,0,.16);n.el.style.opacity=String(n.opacity);n.el.tabIndex=-1;n.el.style.pointerEvents="none";if(n.opacity<.01){n.el.remove();nodes.delete(idx)}}
         }
-
-        // Project & render ONE OCTAVE LAYER.
-        const projectLayer = (
-            octave: number,
-            layerScale: number,
-            layerAlpha: number,
-            layerZBase: number,
-            cx: number,
-            cy: number
-        ) => {
-            const pool = getPool(octave)
-
-            const camCellX = Math.floor(cx / CELL_SIZE)
-            const camCellY = Math.floor(cy / CELL_SIZE)
-
-            // Cells needed to cover the whole viewport at this layer's scale.
-            // World half-extent visible = (px half) / (PX_PER_UNIT * layerScale).
-            // +1 cell of margin so tiles straddling the edge still render.
-            const worldHalfX = cW / 2 / (PX_PER_UNIT * layerScale)
-            const worldHalfY = cH / 2 / (PX_PER_UNIT * layerScale)
-            const rangeX = Math.min(
-                MAX_RANGE,
-                Math.ceil(worldHalfX / CELL_SIZE) + 1
-            )
-            const rangeY = Math.min(
-                MAX_RANGE,
-                Math.ceil(worldHalfY / CELL_SIZE) + 1
-            )
-
-            const visibleKeys = new Set<string>()
-            const tilesThisFrame: Tile[] = []
-
-            for (let dy = -rangeY; dy <= rangeY; dy++) {
-                for (let dx = -rangeX; dx <= rangeX; dx++) {
-                    const tiles = generateCell(
-                        camCellX + dx,
-                        camCellY + dy,
-                        octave
-                    )
-                    for (let i = 0; i < tiles.length; i++) {
-                        tilesThisFrame.push(tiles[i])
-                    }
-                }
-            }
-
-            const orderKeys: string[] = new Array(tilesThisFrame.length)
-            const orderScale: number[] = new Array(tilesThisFrame.length)
-
-            for (let i = 0; i < tilesThisFrame.length; i++) {
-                const t = tilesThisFrame[i]
-                const key = `${t.cx},${t.cy},${t.slot}`
-                const dxPx = (t.wx - cx) * layerScale * PX_PER_UNIT
-                const dyPx = (t.wy - cy) * layerScale * PX_PER_UNIT
-                const s = t.bakedScale * layerScale
-                const wPx = t.w * PX_PER_UNIT
-                const hPx = t.h * PX_PER_UNIT
-                // Cull fully offscreen tiles before creating or updating DOM nodes.
-                if (Math.abs(dxPx) > cW / 2 + wPx * s / 2 + 32 || Math.abs(dyPx) > cH / 2 + hPx * s / 2 + 32) continue
-                visibleKeys.add(key)
-                const el = ensureTile(t)
-                const img = pool.imgEls.get(key)
-
-                el.style.transform = `translate3d(${dxPx}px, ${dyPx}px, 0) scale(${s}) rotate(${t.rot}deg) translate(${-wPx / 2}px, ${-hPx / 2}px)`
-                el.style.width = `${wPx}px`
-                el.style.height = `${hPx}px`
-                el.style.opacity = String(layerAlpha)
-                const onScreen = Math.abs(dxPx) < cW / 2 + wPx * s / 2 && Math.abs(dyPx) < cH / 2 + hPx * s / 2
-                el.tabIndex = onScreen && layerAlpha > 0.5 ? 0 : -1
-                el.style.pointerEvents = layerAlpha > 0.5 ? "auto" : "none"
-
-                // Rounded corners, same mapping as SpinImage: 0..20 → up to half
-                // the short edge (a square tile becomes a circle at 20). The
-                // tile transform scales this px radius along with the image.
-                if (img) {
-                    const radiusPx =
-                        (safeRounded / 20) * (Math.min(wPx, hPx) / 2)
-                    img.style.borderRadius = `${radiusPx}px`
-                }
-
-                orderKeys[i] = key
-                orderScale[i] = t.bakedScale
-            }
-
-            for (const key of Array.from(pool.tileEls.keys())) {
-                if (!visibleKeys.has(key)) removeTile(octave, key)
-            }
-
-            const idxs = orderKeys.map((_, i) => i)
-            idxs.sort((a, b) => orderScale[a] - orderScale[b])
-            for (let k = 0; k < idxs.length; k++) {
-                const el = pool.tileEls.get(orderKeys[idxs[k]])
-                if (el) el.style.zIndex = String(layerZBase + k)
-            }
-        }
-
-        let lastOctaves: Set<number> = new Set()
-
-        const project = () => {
-            const cx = camX.get()
-            const cy = camY.get()
-            const lz = logZoom.get()
-
-            const octave = Math.floor(lz)
-            const frac = lz - octave
-
-            const scaleCurrent = Math.pow(2, frac)
-            const scaleNext = Math.pow(2, frac - 1)
-
-            const alphaCurrent = 1 - frac
-            const alphaNext = frac
-
-            const zBaseCurrent = 0
-            const zBaseNext = 100000
-
-            projectLayer(
-                octave,
-                scaleCurrent,
-                alphaCurrent,
-                zBaseCurrent,
-                cx,
-                cy
-            )
-            projectLayer(octave + 1, scaleNext, alphaNext, zBaseNext, cx, cy)
-
-            const nowOctaves = new Set<number>([octave, octave + 1])
-            for (const o of Array.from(lastOctaves)) {
-                if (!nowOctaves.has(o)) disposeLayer(o)
-            }
-            for (const o of Array.from(layerPools.keys())) {
-                if (!nowOctaves.has(o)) disposeLayer(o)
-            }
-            lastOctaves = nowOctaves
-        }
+        const disposeAllLayers=()=>{for(const n of nodes.values())n.el.remove();nodes.clear()}
 
         project()
         if (isStatic) {
@@ -741,7 +577,7 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
             } catch {}
             el.style.cursor = "grab"
             if (!moved && clickHref && e.type === "pointerup") {
-                sessionStorage.setItem("ac-gallery-state", JSON.stringify({x: targetX.get(), y: targetY.get(), zoom: targetLogZoom.get()}))
+                sessionStorage.setItem("ac-gallery-v5", JSON.stringify({x: targetX.get(), y: targetY.get(), zoom: targetLogZoom.get()}))
                 window.location.assign(clickHref)
             }
             clickHref = ""
@@ -769,6 +605,8 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
         el.addEventListener("pointerup", onUp)
         el.addEventListener("pointercancel", onCancel)
         el.addEventListener("wheel", onWheel, { passive: false })
+        const onKey=(e:KeyboardEvent)=>{if(e.target!==el)return;const step=35;if(e.key==="ArrowLeft")targetX.set(targetX.get()-step);else if(e.key==="ArrowRight")targetX.set(targetX.get()+step);else if(e.key==="ArrowUp")targetY.set(targetY.get()-step);else if(e.key==="ArrowDown")targetY.set(targetY.get()+step);else if(e.key==="+"||e.key==="=")targetLogZoom.set(targetLogZoom.get()+.35);else if(e.key==="-")targetLogZoom.set(targetLogZoom.get()-.35);else return;e.preventDefault()}
+        el.addEventListener("keydown",onKey)
         el.addEventListener("pointerleave", onLeave)
 
         el.style.cursor = "grab"
@@ -779,6 +617,7 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
             el.removeEventListener("pointerup", onUp)
             el.removeEventListener("pointercancel", onCancel)
             el.removeEventListener("wheel", onWheel)
+            el.removeEventListener("keydown", onKey)
             el.removeEventListener("pointerleave", onLeave)
         }
     }, [
@@ -827,7 +666,7 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
     }
 
     return (
-        <div ref={containerRef} className={className} style={wrapperStyle}>
+        <div ref={containerRef} className={className} style={wrapperStyle} role="region" aria-label="Project canvas" tabIndex={0}>
             <div ref={sceneRef} style={sceneStyle} />
         </div>
     )

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import Wordmark from './VectorWordmark';
-import Gallery from './FiniteGallery';
+import Gallery from './CanvasGallery';
 import VisualCarousel from './VisualCarousel';
 
 const wm=document.getElementById('wordmark-root');
