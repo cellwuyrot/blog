@@ -2,9 +2,10 @@ import os,tempfile,sys,json,io,unittest,re,xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 D=tempfile.TemporaryDirectory();os.environ['DATA_DIR']=D.name;os.environ['SITE_URL']='https://acoulbot.space';sys.path.insert(0,os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import app as a
+from fixtures import publish_samples
 class Web(unittest.TestCase):
  @classmethod
- def setUpClass(cls): cls.c=a.app.test_client()
+ def setUpClass(cls): publish_samples(a); cls.c=a.app.test_client()
  def test_public(self):
   for lang in ['ru','en']:
    for path in ['','news','about','privacy','project/tophit','project/asiabasa','project/connect','project/sera']:

@@ -1,9 +1,11 @@
 import io, unittest
 from pathlib import Path
 import app as a
+from fixtures import publish_samples
 
 class V4(unittest.TestCase):
  def setUp(self):
+  publish_samples(a)
   self.c=a.app.test_client(); self.h={'X-CSRF-Token':'token'}
   with self.c.session_transaction() as s:s['admin']=True;s['csrf']='token'
  def upload(self,path):

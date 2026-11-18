@@ -3,9 +3,11 @@ from pathlib import Path
 D = tempfile.TemporaryDirectory()
 os.environ["DATA_DIR"] = D.name
 import app as a
+from fixtures import publish_samples
 
 class Images(unittest.TestCase):
  def setUp(self):
+  publish_samples(a)
   self.c=a.app.test_client(); self.h={'X-CSRF-Token':'token'}
   with self.c.session_transaction() as s: s['admin']=True; s['csrf']='token'
  def upload(self):
