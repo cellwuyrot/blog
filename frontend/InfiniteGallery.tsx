@@ -28,6 +28,7 @@ interface InfiniteGalleryProps {
     backgroundColor: string
     style?: React.CSSProperties
     touchEnabled?: boolean
+    title?: string
 }
 
 const DEFAULT_IMAGES: GalleryImage[] = [
@@ -174,6 +175,7 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
         backgroundColor,
         style,
         touchEnabled,
+        title,
     } = props
 
     const containerRef = useRef<HTMLDivElement | null>(null)
@@ -336,7 +338,7 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
             if(src.src){img=document.createElement("img");img.src=src.src;if(src.srcSet)img.srcset=src.srcSet;img.alt="";img.draggable=false;Object.assign(img.style,{width:"100%",height:"100%",objectFit:src.fit === "contain" ? "contain" : "cover",display:"block",pointerEvents:"none",userSelect:"none"});el.appendChild(img)}
             else {let art=document.createElement("span");art.className="inf-placeholder";art.setAttribute("aria-hidden","true");art.textContent="↗";el.appendChild(art)}
             const caption=document.createElement("span");caption.className="inf-caption";const category=document.createElement("small"),title=document.createElement("strong");category.textContent=src.category || "";title.textContent=src.title || "";caption.append(category,title);el.appendChild(caption)
-            if(src.fit === "contain" && img){const image=img;const positionCaption=()=>{if(!image.naturalWidth || !image.naturalHeight)return;const drawnHeight=Math.min(safeImageHeight,safeImageWidth*image.naturalHeight/image.naturalWidth);caption.style.top=`${(safeImageHeight+drawnHeight)/2}px`};image.addEventListener("load",positionCaption,{once:true});if(image.complete)positionCaption()}
+
             scene.appendChild(el);let draw:Draw={el,img,tile:null,x:0,y:0,scale:1,opacity:0};nodes.set(idx,draw);return draw
         }
         type Projection={tile:Tile; x:number;y:number;scale:number;width:number;height:number}
@@ -385,8 +387,15 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
                 else {n.x=p.x;n.y=p.y;n.scale=p.scale}
                 const size=Math.min(p.width*p.scale,p.height*p.scale);const large=Math.max(p.width*p.scale/(cW||1),p.height*p.scale/(cH||1))
                 const target=Math.min(1,Math.max(0,(size-5)/22),Math.max(0,(4-large)*1.3));n.opacity=reduced?target:lerp(n.opacity,target,.16)
-                n.el.style.width=`${p.width}px`;n.el.style.height=`${p.height}px`
-                n.el.style.transform=`translate3d(${n.x}px, ${n.y}px, 0) scale(${n.scale}) translate(${-p.width/2}px, ${-p.height/2}px)`
+                // Layout at the actual rendered size instead of enlarging a low-resolution
+                // composited layer with transform:scale(). Always use the original upload.
+                const drawW=p.width*n.scale,drawH=p.height*n.scale
+                n.el.style.width=`${drawW}px`;n.el.style.height=`${drawH}px`
+                n.el.style.transform=`translate3d(${n.x-drawW/2}px, ${n.y-drawH/2}px, 0)`
+                if(n.img && safeImages[idx].fit === "contain" && n.img.naturalWidth && n.img.naturalHeight){
+                    const drawnHeight=Math.min(drawH,drawW*n.img.naturalHeight/n.img.naturalWidth)
+                    const caption=n.el.querySelector<HTMLElement>(".inf-caption");if(caption)caption.style.top=`${(drawH+drawnHeight)/2}px`
+                }
                 n.el.style.opacity=String(n.opacity);n.el.style.zIndex=String(Math.round(p.tile.bakedScale*100));n.el.tabIndex=n.opacity>.4?0:-1;n.el.style.pointerEvents=n.opacity>.4?"auto":"none"
                 if(n.img)n.img.style.borderRadius=`${(safeRounded/20)*(Math.min(p.width,p.height)/2)}px`
             }
@@ -585,7 +594,12 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
 
         const onCancel = (e: PointerEvent) => onUp(e)
 
+        let enteredAt: number | null = null
+        const onEnter = (e: PointerEvent) => { if (e.pointerType === "mouse") enteredAt=performance.now() }
+        const onExit = (e: PointerEvent) => { if (e.pointerType === "mouse") enteredAt=null }
         const onWheel = (e: WheelEvent) => {
+            if (enteredAt === null) enteredAt=performance.now()
+            if (performance.now()-enteredAt >= 3000) { velLogZoom.set(0); return }
             e.preventDefault()
             let delta = e.deltaY
             if (e.deltaMode === 1) delta *= 16
@@ -604,6 +618,8 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
         el.addEventListener("pointermove", onMove)
         el.addEventListener("pointerup", onUp)
         el.addEventListener("pointercancel", onCancel)
+        el.addEventListener("pointerenter", onEnter)
+        el.addEventListener("pointerleave", onExit)
         el.addEventListener("wheel", onWheel, { passive: false })
         const onKey=(e:KeyboardEvent)=>{if(e.target!==el)return;const step=35;if(e.key==="ArrowLeft")targetX.set(targetX.get()-step);else if(e.key==="ArrowRight")targetX.set(targetX.get()+step);else if(e.key==="ArrowUp")targetY.set(targetY.get()-step);else if(e.key==="ArrowDown")targetY.set(targetY.get()+step);else if(e.key==="+"||e.key==="=")targetLogZoom.set(targetLogZoom.get()+.35);else if(e.key==="-")targetLogZoom.set(targetLogZoom.get()-.35);else return;e.preventDefault()}
         el.addEventListener("keydown",onKey)
@@ -616,6 +632,8 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
             el.removeEventListener("pointermove", onMove)
             el.removeEventListener("pointerup", onUp)
             el.removeEventListener("pointercancel", onCancel)
+            el.removeEventListener("pointerenter", onEnter)
+            el.removeEventListener("pointerleave", onExit)
             el.removeEventListener("wheel", onWheel)
             el.removeEventListener("keydown", onKey)
             el.removeEventListener("pointerleave", onLeave)
@@ -666,7 +684,7 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
     }
 
     return (
-        <div ref={containerRef} className={className} style={wrapperStyle} role="region" aria-label="Project canvas" tabIndex={0}>
+        <div ref={containerRef} className={className} style={wrapperStyle} role="region" aria-label={title || "Project canvas"} tabIndex={0}>
             <div ref={sceneRef} style={sceneStyle} />
         </div>
     )

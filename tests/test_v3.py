@@ -2,8 +2,10 @@ import os,sys,tempfile,unittest,io,json
 from pathlib import Path
 D=tempfile.TemporaryDirectory();os.environ['DATA_DIR']=D.name;sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import app as a
+from fixtures import publish_samples
 class SiteEditing(unittest.TestCase):
  def setUp(self):
+  publish_samples(a)
   self.c=a.app.test_client()
   with self.c.session_transaction() as s:s['admin']=True;s['csrf']='token'
   self.h={'X-CSRF-Token':'token'}
