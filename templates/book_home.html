@@ -1,0 +1,12 @@
+{% extends 'base.html' %}{% block body %}
+<main class="book-page" id="top" data-book-home data-lang="{{lang}}">
+ <div class="book-kicker"><a href="/{{lang}}/">ACOULBOT</a><span>/</span><span>{{ 'КНИГА' if lang=='ru' else 'BOOK' }}</span></div>
+ <section class="book-intro">
+  <div class="book-intro-copy"><p class="book-label">{{ 'РОМАН В РАБОТЕ' if lang=='ru' else 'A NOVEL IN PROGRESS' }}</p><h1>{{book.title[lang]}}<span class="book-red">.</span></h1><p class="book-author">ANDY COULBOT</p>{% if book.summary[lang] %}<p class="book-summary">{{book.summary[lang]}}</p>{% endif %}
+   <div class="book-buttons">{% if first %}<a class="book-button" href="/{{lang}}/book/{{first[0].id}}/{{first[1].id}}">{{ 'Начать читать' if lang=='ru' else 'Start reading' }} ↗</a>{% endif %}<a class="book-button book-button--outline" href="/{{lang}}/book/world">{{ 'Мир книги' if lang=='ru' else 'The world' }} ↗</a><a class="book-resume" hidden></a></div></div>
+  <div class="book-cover">{% if book.cover %}<img src="/book-media/{{book.cover}}" alt="{{book.title[lang]}}">{% else %}<div class="book-cover-placeholder"><span>ANDY COULBOT</span><strong>{{book.title[lang]}}</strong><small>{{ 'РОМАН' if lang=='ru' else 'A NOVEL' }}</small></div>{% endif %}</div>
+ </section>
+ <section class="book-contents" id="contents"><p class="book-label">{{ 'СОДЕРЖАНИЕ' if lang=='ru' else 'CONTENTS' }}</p><h2>{{ 'История по частям' if lang=='ru' else 'The story, in parts' }}<span class="book-red">.</span></h2>
+ {% if chapters %}{% for chapter in chapters %}<div class="contents-chapter"><h3>{{ 'Глава' if lang=='ru' else 'Chapter' }} {{chapter.number}}{% if chapter.title[lang] %} — {{chapter.title[lang]}}{% endif %}</h3>{% if chapter.cover %}<img class="chapter-thumb" src="/book-media/{{chapter.cover}}" alt="">{% endif %}<div>{% for part in chapter.parts|sort(attribute='number') %}{% if part.live[lang] %}<a href="/{{lang}}/book/{{chapter.id}}/{{part.id}}"><span>{{ 'Часть' if lang=='ru' else 'Part' }} {{part.number}}{% if part.live[lang].title %} — {{part.live[lang].title}}{% endif %}</span><span>↗</span></a>{% endif %}{% endfor %}</div></div>{% endfor %}{% else %}<p class="book-empty">{{ 'Первые части появятся здесь после публикации.' if lang=='ru' else 'Published parts will appear here.' }}</p>{% endif %}</section>
+</main>
+{% endblock %}{% block scripts %}<script src="/static/book-reader.js" defer></script>{% endblock %}
