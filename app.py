@@ -11,6 +11,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.exceptions import RequestEntityTooLarge
 from copy_fields import FIELDS, BY_KEY
 from markupsafe import Markup, escape
+import book_module
 try:
  import psycopg
 except ImportError:
@@ -266,24 +267,33 @@ def render_public(template,lang='ru',section='',title=None,description=None,og_i
  titles={'ru':'acoulbot — Andy Coulbot | Творчество и технологии','en':'acoulbot — Andy Coulbot | Creative practice & technology'}
  desc={'ru':'Andy Coulbot — фотограф, дизайнер, автор и архитектор-оператор нейросетей. Проекты, истории и эксперименты acoulbot.','en':'Andy Coulbot is a photographer, designer, writer and AI architect-operator. Explore projects, stories and experiments by acoulbot.'}
  canonical=SITE_URL+'/'+lang+'/'+section
+ seo_override=book_module.get_seo(globals()).get(lang+'/'+section,{})
+ if seo_override.get('title'):title=seo_override['title']
+ if seo_override.get('description'):description=seo_override['description']
+ seo_robots=kw.pop('seo_robots','')
+ if seo_override.get('index') is False and 'noindex' not in seo_robots:seo_robots=('noindex, '+seo_robots).strip(', ')
+ available_langs=kw.pop('available_langs',['ru','en'])
  seo_key={'':'home','news':'news','about':'about','privacy':'privacy'}.get(section)
- if seo_key: title=copy('seo_'+seo_key+'_title');description=copy('seo_'+seo_key+'_desc')
+ if seo_key:
+  title=seo_override.get('title') or copy('seo_'+seo_key+'_title');description=seo_override.get('description') or copy('seo_'+seo_key+'_desc')
  visual=content.get('visual',{});about_photos=content.get('about_photos',{});contacts={'telegram':'https://t.me/aclbt','email':'acoulbot@gmail.com','connect':'http://trioz.ru/connect','discord':''};contacts.update(content.get('contacts',{}));same_as=[contacts[k] for k in ('telegram','connect','discord') if contacts.get(k)]
- return render_template(template,lang=lang,site_url=SITE_URL,section=section,canonical=canonical,seo_title=title or titles[lang],seo_desc=description or desc[lang],og_image=SITE_URL+(og_image or '/static/og-default.png'),ga_id=analytics_id('GA_MEASUREMENT_ID',r'G-[A-Z0-9]{4,20}'),ym_id=analytics_id('YANDEX_METRIKA_ID',r'[0-9]{1,20}'),google_verification=os.environ.get('GOOGLE_SITE_VERIFICATION',''),yandex_verification=os.environ.get('YANDEX_SITE_VERIFICATION',''),featured_sections={p.get('feature') for p in projects(True) if p.get('feature')},has_news=any(p.get('kind')=='news' for p in projects(True)),has_projects=any(p.get('kind','project')=='project' for p in projects(True)),copy=copy,editable=editable,edit_mode=edit_mode,edit_csrf=session.get('csrf',''),visual=visual,about_photos=about_photos,contacts=contacts,same_as=same_as,**kw)
+ return render_template(template,lang=lang,site_url=SITE_URL,section=section,canonical=canonical,seo_robots=seo_robots,available_langs=available_langs,seo_title=title or titles[lang],seo_desc=description or desc[lang],og_image=SITE_URL+(og_image or '/static/og-default.png'),ga_id=analytics_id('GA_MEASUREMENT_ID',r'G-[A-Z0-9]{4,20}'),ym_id=analytics_id('YANDEX_METRIKA_ID',r'[0-9]{1,20}'),google_verification=os.environ.get('GOOGLE_SITE_VERIFICATION',''),yandex_verification=os.environ.get('YANDEX_SITE_VERIFICATION',''),featured_sections={p.get('feature') for p in projects(True) if p.get('feature')},has_news=any(p.get('kind')=='news' for p in projects(True)),has_projects=any(p.get('kind','project')=='project' for p in projects(True)),copy=copy,editable=editable,edit_mode=edit_mode,edit_csrf=session.get('csrf',''),visual=visual,about_photos=about_photos,contacts=contacts,same_as=same_as,**kw)
 @app.get('/')
 def home_root():return home('ru')
 @app.get('/<lang>/')
 def home(lang):
  lang_ok(lang);ps=projects(True);featured={p['feature']:p for p in ps if p.get('feature')}
- work=[p for p in ps if p.get('kind','project')=='project']
+ book_data=book_module.get_book(globals())
+ work=[dict(p,title=book_data['title']) if p.get('slug')=='sera' and p.get('feature')=='book' else p for p in ps if p.get('kind','project')=='project']
  news=sorted((p for p in ps if p.get('kind')=='news'),key=lambda p:p.get('published_at',0),reverse=True)
- return render_public('index.html',lang,projects=work,canvas_items=gallery_assets(work),news=news,featured=featured,playlist=setting('playlist'))
+ return render_public('index.html',lang,projects=work,canvas_items=gallery_assets(work),news=news,featured=featured,book=book_data,playlist=setting('playlist'))
 @app.get('/project/<slug>')
 def legacy_detail(slug):return redirect('/ru/project/'+slug,code=301)
 @app.get('/<lang>/project/<slug>')
 def detail(lang,slug):
  lang_ok(lang);p=next((x for x in projects(True) if x['slug']==slug),None)
  if not p:abort(404)
+ if slug=='sera' and p.get('feature')=='book':return redirect('/'+lang+'/book',code=301)
  related=next((x for x in projects(True) if x['id']==p.get('related_id') and x.get('kind')=='project'),None)
  return render_public('project.html',lang,section='project/'+p['slug'],title=p['title'][lang]+' — Andy Coulbot | acoulbot',description=p['summary'][lang],og_image=p.get('cover') or None,p=p,related=related,preview=False)
 @app.get('/<lang>/preview/<int:pid>')
@@ -329,11 +339,13 @@ def robots():return Response('User-agent: *\nAllow: /\nDisallow: /enter\nDisallo
 @app.get('/sitemap.xml')
 def sitemap():
  ns='http://www.sitemaps.org/schemas/sitemap/0.9';xh='http://www.w3.org/1999/xhtml';ET.register_namespace('',ns);ET.register_namespace('xhtml',xh)
- root=ET.Element('{%s}urlset'%ns);paths=['','news','about','privacy']+['project/'+p['slug'] for p in projects(True)]
- for path in paths:
-  for lang in ('ru','en'):
+ root=ET.Element('{%s}urlset'%ns);paths=['','news','about','privacy']+['project/'+p['slug'] for p in projects(True) if not (p['slug']=='sera' and p.get('feature')=='book')]
+ overrides=book_module.get_seo(globals()); entries=[(p,['ru','en']) for p in paths]+list(book_module.book_sitemap(book_module.get_book(globals())))
+ for path, available in entries:
+  langs=[l for l in available if overrides.get(l+'/'+path,{}).get('index') is not False]
+  for lang in langs:
    url=ET.SubElement(root,'{%s}url'%ns);ET.SubElement(url,'{%s}loc'%ns).text=SITE_URL+'/'+lang+'/'+path
-   for alt in ('ru','en'):ET.SubElement(url,'{%s}link'%xh,{'rel':'alternate','hreflang':alt,'href':SITE_URL+'/'+alt+'/'+path})
+   for alt in langs:ET.SubElement(url,'{%s}link'%xh,{'rel':'alternate','hreflang':alt,'href':SITE_URL+'/'+alt+'/'+path})
  return Response(ET.tostring(root,encoding='utf-8',xml_declaration=True),mimetype='application/xml')
 @app.get('/<lang>/feed.xml')
 def feed(lang):
@@ -561,6 +573,7 @@ def spotify_now():
   spotify_cache.update(at=time.time(),data=result);return jsonify(result)
 
 init_db()
+book_module.register(app,globals())
 try:
  os.chmod(DATA,0o700); os.chmod(DB,0o600)
 except OSError: pass

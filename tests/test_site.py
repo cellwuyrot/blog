@@ -8,9 +8,9 @@ class Web(unittest.TestCase):
  def setUpClass(cls): publish_samples(a); cls.c=a.app.test_client()
  def test_public(self):
   for lang in ['ru','en']:
-   for path in ['','news','about','privacy','project/tophit','project/asiabasa','project/connect','project/sera']:
+   for path in ['','news','about','privacy','project/tophit','project/asiabasa','project/connect']:
     r=self.c.get('/'+lang+'/'+path);s=r.get_data(as_text=True);self.assertEqual(r.status_code,200,path);self.assertEqual(len(re.findall(r'<h1\b',s)),1,path);self.assertIn('rel="canonical"',s);self.assertIn('hreflang="en"',s);self.assertIn('property="og:image"',s)
-  self.assertEqual(self.c.get('/ru/nope').status_code,404);self.assertEqual(self.c.get('/project/tophit').status_code,301)
+  self.assertEqual(self.c.get('/ru/project/sera').status_code,301);self.assertEqual(self.c.get('/ru/project/sera').headers['Location'],'/ru/book');self.assertEqual(self.c.get('/ru/nope').status_code,404);self.assertEqual(self.c.get('/project/tophit').status_code,301)
   self.assertIn('/ru/project/tophit',self.c.get('/ru/').text)
  def test_sitemap_feed(self):
   r=self.c.get('/sitemap.xml');root=ET.fromstring(r.data);locs=[e.text for e in root.findall('{*}url/{*}loc')];self.assertGreaterEqual(len(locs),16)

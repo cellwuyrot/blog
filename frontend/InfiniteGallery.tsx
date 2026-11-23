@@ -320,20 +320,19 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
 
         // One physical element per image. Its placement remains stable while it
         // is visible. When it leaves the view, it can reappear at a new depth.
-        type Draw = { el: HTMLDivElement; img: HTMLImageElement | null; tile: Tile | null; x: number; y: number; scale: number; opacity: number }
+        type Draw = { el: HTMLAnchorElement; img: HTMLImageElement | null; tile: Tile | null; x: number; y: number; scale: number; opacity: number }
         const nodes = new Map<number, Draw>()
         const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
         const keyOf = (t: Tile) => `${t.octave}:${t.cx}:${t.cy}:${t.slot}`
         const getNode = (idx:number):Draw => {
             const previous=nodes.get(idx); if(previous) return previous
             const src=safeImages[idx]
-            const el=document.createElement("div")
+            const el=document.createElement("a")
             el.className="inf-card"+(src.fit === "contain" ? " inf-card--contain" : "")+(!src.src ? " inf-card--empty" : "")
             Object.assign(el.style,{position:"absolute",left:"50%",top:"50%",transformOrigin:"0 0",willChange:"transform, opacity",pointerEvents:"auto"})
-            el.dataset.href=src.href || "";el.dataset.imageIndex=String(idx)
-            el.setAttribute("role","link");el.setAttribute("aria-label",src.title || src.alt || "Project")
-            el.addEventListener("click",(e)=>{if(!touchEnabled && matchMedia("(pointer: coarse)").matches && e.detail && el.dataset.href){sessionStorage.setItem("ac-gallery-v5",JSON.stringify({x:targetX.get(),y:targetY.get(),zoom:targetLogZoom.get()}));window.location.assign(el.dataset.href)}})
-            el.addEventListener("keydown",e=>{if(e.key==="Enter" && el.dataset.href){sessionStorage.setItem("ac-gallery-v5",JSON.stringify({x:targetX.get(),y:targetY.get(),zoom:targetLogZoom.get()}));window.location.assign(el.dataset.href)}})
+            el.dataset.href=src.href || "";el.dataset.imageIndex=String(idx);el.href=src.href || "#";el.draggable=false
+            el.setAttribute("aria-label",src.title || src.alt || "Project")
+            el.addEventListener("click",()=>{try{sessionStorage.setItem("ac-gallery-v5",JSON.stringify({x:targetX.get(),y:targetY.get(),zoom:targetLogZoom.get()}))}catch{}})
             let img:HTMLImageElement|null=null
             if(src.src){img=document.createElement("img");img.src=src.src;if(src.srcSet)img.srcset=src.srcSet;img.alt="";img.draggable=false;Object.assign(img.style,{width:"100%",height:"100%",objectFit:src.fit === "contain" ? "contain" : "cover",display:"block",pointerEvents:"none",userSelect:"none"});el.appendChild(img)}
             else {let art=document.createElement("span");art.className="inf-placeholder";art.setAttribute("aria-hidden","true");art.textContent="↗";el.appendChild(art)}
@@ -614,6 +613,8 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
             driftTY.set(0)
         }
 
+        const onClickCapture=(e:MouseEvent)=>{if(moved){e.preventDefault();e.stopPropagation();moved=false}}
+        el.addEventListener("click",onClickCapture,true)
         el.addEventListener("pointerdown", onDown)
         el.addEventListener("pointermove", onMove)
         el.addEventListener("pointerup", onUp)
@@ -628,6 +629,7 @@ export default function InfiniteGallery(props: InfiniteGalleryProps) {
         el.style.cursor = "grab"
 
         return () => {
+            el.removeEventListener("click",onClickCapture,true)
             el.removeEventListener("pointerdown", onDown)
             el.removeEventListener("pointermove", onMove)
             el.removeEventListener("pointerup", onUp)
