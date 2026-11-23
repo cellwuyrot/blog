@@ -3,7 +3,18 @@
  <div class="reading-top"><a href="/{{lang}}/book#contents">← {{ 'Содержание' if lang=='ru' else 'Contents' }}</a><div class="reading-controls"><button type="button" data-size="down" aria-label="{{ 'Уменьшить текст' if lang=='ru' else 'Smaller text' }}">А−</button><button type="button" data-size="up" aria-label="{{ 'Увеличить текст' if lang=='ru' else 'Larger text' }}">А+</button><button type="button" data-theme aria-label="{{ 'Сменить тему' if lang=='ru' else 'Change theme' }}">◐</button></div></div>
  <aside class="reading-notice" data-world-notice hidden role="status">{{ "Отношения изменились." if lang=="ru" else "Relationships have changed." }} <a href="/{{lang}}/book/world">{{ "Посмотреть в мире книги" if lang=="ru" else "Explore the world" }} ↗</a></aside>
  <header class="reading-heading"><p class="book-label">{{book.title[lang]}} / {{ 'ГЛАВА' if lang=='ru' else 'CHAPTER' }} {{chapter.number}} / {{ 'ЧАСТЬ' if lang=='ru' else 'PART' }} {{part.number}}</p><h1>{{version.title or ((('Глава ' if lang=='ru' else 'Chapter ') ~ chapter.number) ~ ' · ' ~ (('часть ' if lang=='ru' else 'part ') ~ part.number))}}</h1><p>ANDY COULBOT</p></header>
- <article class="reading-text">{{part_html}}</article>
+ <div class="reading-layout">
+  <article class="reading-text">{{part_html}}</article>
+  <aside class="reading-aside" aria-label="{{ 'Персонажи этой части' if lang=='ru' else 'Characters in this part' }}">
+   <details open class="reading-cast"><summary>{{ 'Персонажи этой части' if lang=='ru' else 'Characters in this part' }} <span>{{scene.cast|length}}</span></summary>
+   <div class="reading-cast-content">
+   {% if scene.cast %}<p class="reading-aside-intro">{{ 'На начало этой части' if lang=='ru' else 'At the start of this part' }}</p>
+   {% for person in scene.cast %}<section class="reading-person">{% if person.portrait %}<img src="/book-media/{{person.portrait}}{% if scene.through %}?through={{scene.through|urlencode}}{% endif %}" alt="" loading="lazy">{% endif %}<div><h2><a href="/{{lang}}/book/world/{{person.id}}{% if scene.through %}?through={{scene.through|urlencode}}{% endif %}">{{person.name}} ↗</a></h2>{% if person.note %}<p>{{person.note}}</p>{% endif %}</div></section>{% endfor %}
+   {% if scene.relations %}<h2 class="reading-relations-heading">{{ 'Связи' if lang=='ru' else 'Connections' }}</h2>{% for relation in scene.relations %}<section class="reading-relation"><p class="reading-relation-names">{{relation.source}} <span aria-label="{{ 'к' if lang=='ru' else 'to' }}">→</span> {{relation.target}}</p>{% if relation.label %}<h3>{{relation.label}}</h3>{% endif %}{% if relation.text %}<p>{{relation.text}}</p>{% endif %}</section>{% endfor %}{% endif %}
+   {% else %}<p>{{ 'Для этой части автор пока не указал персонажей.' if lang=='ru' else 'No characters have been listed for this part yet.' }}</p>{% endif %}
+   </div></details>
+  </aside>
+ </div>
  <nav class="reading-navigation" aria-label="{{ 'Навигация по книге' if lang=='ru' else 'Book navigation' }}"><div>{% if prev %}<a href="/{{lang}}/book/{{prev[0].id}}/{{prev[1].id}}">← {{ 'Предыдущая часть' if lang=='ru' else 'Previous part' }}</a>{% endif %}</div><a class="reading-world" href="/{{lang}}/book/world">{{ 'Мир книги' if lang=='ru' else 'The world' }} ↗</a><div>{% if next %}<a data-next href="/{{lang}}/book/{{next[0].id}}/{{next[1].id}}">{{ 'Следующая часть' if lang=='ru' else 'Next part' }} →</a>{% else %}<button data-finish type="button">{{ 'Отметить прочитанной' if lang=='ru' else 'Mark as read' }} ✓</button>{% endif %}</div></nav>
 </main>
 {% endblock %}{% block scripts %}<script src="/static/book-reader.js" defer></script>{% endblock %}
