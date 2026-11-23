@@ -13,10 +13,21 @@ MAX_BOOK = 16 * 1024 * 1024
 def empty_book():
  return {'revision':0,'title':{'ru':'Конфронтация','en':'Confrontation'},'summary':{'ru':'','en':''},'cover':'','chapters':[],'characters':[],'places':[]}
 
+def empty_scene():
+ return {'cast':[],'relations':[]}
+
+def normalise_book(b):
+ # Old books remain intact; new fields are added in memory, then saved normally.
+ for c in b.get('chapters',[]):
+  for p in c.get('parts',[]):
+   p.setdefault('scene',empty_scene())
+   p.setdefault('scene_live',{'ru':None,'en':None})
+ return b
+
 def get_book(s):
  try:
   b=json.loads(s['setting']('confrontation_v1','{}'))
-  if isinstance(b,dict) and isinstance(b.get('revision'),int):return b
+  if isinstance(b,dict) and isinstance(b.get('revision'),int):return normalise_book(b)
  except (ValueError,TypeError):pass
  return empty_book()
 
@@ -33,7 +44,8 @@ def validate_book(b):
  def photo(v):return isinstance(v,str) and (not v or bool(IMAGE.fullmatch(v)))
  if not loc(b.get('title'),300) or not b['title']['ru'].strip() or not loc(b.get('summary'),5000) or not photo(b.get('cover','')):return 'Проверьте название, аннотацию и обложку'
  if any(not isinstance(b.get(k),list) for k in ('chapters','characters','places')):return 'Неверная структура книги'
- if len(b['chapters'])>500 or sum(len(c.get('parts',[])) for c in b['chapters'] if isinstance(c,dict))>3000 or sum(len(b[k]) for k in ('characters','places'))>3000:return 'Превышено ограничение количества записей'
+ if any(not isinstance(c,dict) or not isinstance(c.get('parts'),list) for c in b['chapters']):return 'Некорректные главы'
+ if len(b['chapters'])>500 or sum(len(c['parts']) for c in b['chapters'])>3000 or sum(len(b[k]) for k in ('characters','places'))>3000:return 'Превышено ограничение количества записей'
  ids=set(); part_ids=set(); chapter_numbers=set()
  def identifier(v):
   if not isinstance(v,str) or not ID.fullmatch(v) or v in ids:return False
@@ -61,6 +73,22 @@ def validate_book(b):
    for fact in ent['facts']+ent['relations']:
     if not isinstance(fact,dict) or not identifier(fact.get('id')) or not loc(fact.get('label'),300) or not loc(fact.get('text'),10000) or type(fact.get('public')) is not bool or not isinstance(fact.get('after'),str) or (fact['after'] and fact['after'] not in part_ids):return 'Проверьте информацию и привязку к части'
     if 'target' in fact and (not isinstance(fact['target'],str) or (fact['target'] and not ID.fullmatch(fact['target']))):return 'Некорректная связь'
+ # Scene context is a separate author-approved snapshot for each published language.
+ character_ids={e['id'] for e in b['characters']}
+ for ch in b['chapters']:
+  for part in ch['parts']:
+   scene=part.get('scene',empty_scene()); live=part.get('scene_live',{'ru':None,'en':None})
+   if not isinstance(live,dict):return 'Некорректные версии персонажей части'
+   def check_scene(v):
+    if not isinstance(v,dict) or not isinstance(v.get('cast'),list) or not isinstance(v.get('relations'),list) or len(v['cast'])>100 or len(v['relations'])>300:return False
+    selected=set()
+    for c in v['cast']:
+     if not isinstance(c,dict) or not isinstance(c.get('entity'),str) or c.get('entity') not in character_ids or c['entity'] in selected or not loc(c.get('note'),5000):return False
+     selected.add(c['entity'])
+    for r in v['relations']:
+     if not isinstance(r,dict) or not isinstance(r.get('id'),str) or not ID.fullmatch(r['id']) or not isinstance(r.get('source'),str) or not isinstance(r.get('target'),str) or r.get('source') not in selected or r.get('target') not in selected or r['source']==r['target'] or not loc(r.get('label'),300) or not loc(r.get('text'),5000):return False
+    return True
+   if not check_scene(scene) or any(live.get(l) is not None and not check_scene(live[l]) for l in ('ru','en')):return 'Проверьте персонажей и связи части'
  return None
 
 def save_state(s,key,value,revision):
@@ -108,6 +136,21 @@ def visible_world(b,lang,through):
     latest[group]=(rank,{'label':(names[target]+(' · '+label if label else '')) if target else label,'text':text})
   cards.append({'id':ent['id'],'kind':kind,'name':ent['name'][lang],'portrait':ent['portrait'] if ent['portrait_public'] else '', 'facts':facts,'relations':[v[1] for v in latest.values()]})
  return cards
+
+def scene_for_reader(b,lang,part,previous):
+ # Only the approved snapshot of this exact part, and only previously revealed
+ # characters, can reach the reader. Draft and private dossiers never leave here.
+ scene=part.get('scene_live',{}).get(lang)
+ if not scene:return {'cast':[],'relations':[],'through':previous}
+ allowed={c['id']:c for c in visible_world(b,lang,previous) if c['kind']=='characters'}
+ cast=[{'id':item['entity'],'name':allowed[item['entity']]['name'],
+        'note':item['note'][lang],'portrait':allowed[item['entity']]['portrait']}
+       for item in scene['cast'] if item['entity'] in allowed]
+ names={c['id']:c['name'] for c in cast}
+ relations=[{'source':names[r['source']],'target':names[r['target']],
+             'label':r['label'][lang],'text':r['text'][lang]}
+            for r in scene['relations'] if r['source'] in names and r['target'] in names and (r['label'][lang] or r['text'][lang])]
+ return {'cast':cast,'relations':relations,'through':previous}
 
 def register(app,s):
  DATA=Path(s['DATA']); book_media=DATA/'book-media';book_media.mkdir(mode=0o700,exist_ok=True)
@@ -202,8 +245,9 @@ def register(app,s):
    response=app.make_response(s['render_public']('book_wait.html',lang,section='book/'+cid+'/'+pid,title='Translation pending — '+b['title'][lang],book=b,book_view=True,available_langs=available,seo_robots='noindex, nosnippet'))
    response.headers['X-Robots-Tag']='noindex, nosnippet';return response
   published=parts(b,lang);idx=next(i for i,x in enumerate(published) if x[1]['id']==pid)
+  previous=published[idx-1][1]['id'] if idx else ''; scene=scene_for_reader(b,lang,p,previous)
   title=(v['title'] or (('Глава ' if lang=='ru' else 'Chapter ')+str(c['number'])+' · '+('часть ' if lang=='ru' else 'part ')+str(p['number'])))+' — '+b['title'][lang]+' — Andy Coulbot'
-  return s['render_public']('book_part.html',lang,section='book/'+cid+'/'+pid,title=title,description=v['description'] or ((('Глава '+str(c['number'])+', часть '+str(p['number'])+' книги «'+b['title'][lang]+'».') if lang=='ru' else ('Chapter '+str(c['number'])+', part '+str(p['number'])+' of '+b['title'][lang]+'.'))),book=b,chapter=c,part=p,version=v,part_html=text_html(v['body']),has_relation_change=any(e['published'] and any(f['public'] and f['after']==pid for f in e['relations']) for kind in ('characters','places') for e in b[kind]),prev=published[idx-1] if idx else None,next=published[idx+1] if idx+1<len(published) else None,book_view=True,available_langs=available,seo_robots=('nosnippet' if v['index'] else 'noindex, nosnippet'))
+  return s['render_public']('book_part.html',lang,section='book/'+cid+'/'+pid,title=title,description=v['description'] or ((('Глава '+str(c['number'])+', часть '+str(p['number'])+' книги «'+b['title'][lang]+'».') if lang=='ru' else ('Chapter '+str(c['number'])+', part '+str(p['number'])+' of '+b['title'][lang]+'.'))),book=b,chapter=c,part=p,version=v,scene=scene,part_html=text_html(v['body']),has_relation_change=any(e['published'] and any(f['public'] and f['after']==pid for f in e['relations']) for kind in ('characters','places') for e in b[kind]),prev=published[idx-1] if idx else None,next=published[idx+1] if idx+1<len(published) else None,book_view=True,available_langs=available,seo_robots=('nosnippet' if v['index'] else 'noindex, nosnippet'))
  @app.get('/<lang>/book/world')
  def book_world(lang):
   require_lang(lang);b=get_book(s);published=parts(b,lang);through=request.args.get('through','');pos=next((i for i,(_,p) in enumerate(published) if p['id']==through),-1) if through else -1
